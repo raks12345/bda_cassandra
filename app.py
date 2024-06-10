@@ -13,13 +13,13 @@ app = Flask(__name__)
 # Connect to the Cassandra cluster
 cluster = Cluster(['127.0.0.1'])  # Replace '127.0.0.1' with your Cassandra node IP
 session = cluster.connect()
-session.execute("CREATE KEYSPACE IF NOT EXISTS finance WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-session.set_keyspace('finance')
-session.execute('''CREATE TABLE IF NOT EXISTS finance_entries (
+session.execute("CREATE KEYSPACE IF NOT EXISTS fitness WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+session.set_keyspace('fitness')
+session.execute('''CREATE TABLE IF NOT EXISTS fitness_entries (
                         id UUID PRIMARY KEY,
-                        entry_type TEXT,
-                        amount DECIMAL,
-                        category TEXT,
+                        exercise TEXT,
+                        repetitions DECIMAL,
+                        muscle TEXT,
                         date TEXT
                    )''')
 
@@ -38,52 +38,52 @@ def save_plot(fig):
 @app.route('/')
 def index():
     # Get all entries
-    rows = session.execute('SELECT * FROM finance_entries')
-    entries = [{'id': row.id, 'entry_type': row.entry_type, 'amount': row.amount, 'category': row.category, 'date': row.date} for row in rows]
+    rows = session.execute('SELECT * FROM fitness_entries')
+    entries = [{'id': row.id, 'exercise': row.exercise, 'repetitions': row.repetitions, 'muscle': row.muscle, 'date': row.date} for row in rows]
 
-    # Extract distinct categories from entries
-    all_categories = [entry['category'] for entry in entries]
+    # Extract distinct muscles from entries
+    all_muscles = [entry['muscle'] for entry in entries]
 
-    # Filter out empty categories
-    non_empty_categories = set(category for category in all_categories if category)
+    # Filter out empty muscles
+    non_empty_muscles = set(muscle for muscle in all_muscles if muscle)
 
-    # Get the selected category from the request
-    selected_category = request.args.get('category')
+    # Get the selected muscle from the request
+    selected_muscle = request.args.get('muscle')
 
-    # Filter entries for the selected category if specified
-    if selected_category:
-        entries = [entry for entry in entries if entry['category'] == selected_category]
+    # Filter entries for the selected muscle if specified
+    if selected_muscle:
+        entries = [entry for entry in entries if entry['muscle'] == selected_muscle]
 
-    return render_template('index.html', entries=entries, categories=non_empty_categories, selected_category=selected_category)
+    return render_template('index.html', entries=entries, muscles=non_empty_muscles, selected_muscle=selected_muscle)
 
 @app.route('/add', methods=['POST'])
 def add():
-    entry_type = request.form['entry_type']
-    amount = request.form['amount']
-    category = request.form.get('category')
+    exercise = request.form['exercise']
+    repetitions = request.form['repetitions']
+    muscle = request.form.get('muscle')
     date = request.form.get('date')
 
-    if entry_type != "" and amount != "":
-        if category == "":
-            category = "default"
+    if exercise != "" and repetitions != "":
+        if muscle == "":
+            muscle = "default"
 
         # Insert entry into the database
-        session.execute('INSERT INTO finance_entries (id, entry_type, amount, category, date) VALUES (%s, %s, %s, %s, %s)',
-                        (uuid4(), entry_type, float(amount), category, date))
+        session.execute('INSERT INTO fitness_entries (id, exercise, repetitions, muscle, date) VALUES (%s, %s, %s, %s, %s)',
+                        (uuid4(), exercise, float(repetitions), muscle, date))
 
     return redirect(url_for('index'))
 
 @app.route('/delete/<uuid:id>')
 def delete(id):
-    session.execute('DELETE FROM finance_entries WHERE id = %s', [id])
+    session.execute('DELETE FROM fitness_entries WHERE id = %s', [id])
     return redirect(url_for('index'))
 
 @app.route('/entries_count_chart')
 def entries_count_chart():
-    rows = session.execute('SELECT * FROM finance_entries')
+    rows = session.execute('SELECT * FROM fitness_entries')
     entry_counts = defaultdict(int)
     for row in rows:
-        entry_counts[row.category] += 1
+        entry_counts[row.muscle] += 1
 
     # Create a pie chart
     labels = list(entry_counts.keys())
@@ -101,19 +101,19 @@ def entries_count_chart():
 @app.route('/entry_histogram')
 def entry_histogram():
     # Fetch data from the database
-    rows = session.execute('SELECT * FROM finance_entries')
+    rows = session.execute('SELECT * FROM fitness_entries')
     entry_counts = defaultdict(int)
     for row in rows:
-        entry_counts[row.category] += 1
+        entry_counts[row.muscle] += 1
 
     # Create a histogram
     labels = list(entry_counts.keys())
     sizes = list(entry_counts.values())
     fig, ax = create_plot()
     ax.bar(labels, sizes)
-    ax.set_xlabel('Category')
+    ax.set_xlabel('Muscle')
     ax.set_ylabel('Number of Entries')
-    ax.set_title('Number of Entries in Each Category')
+    ax.set_title('Number of Entries in Each Muscle')
 
     ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -126,7 +126,7 @@ def entry_histogram():
 @app.route('/entry_date')
 def entry_date():
     # Fetch data from the database
-    rows = session.execute('SELECT * FROM finance_entries')
+    rows = session.execute('SELECT * FROM fitness_entries')
     entry_counts = defaultdict(int)
 
     for row in rows:
@@ -166,7 +166,7 @@ def entry_date():
 @app.route('/entry_month')
 def entry_month():
     # Fetch data from the database
-    rows = session.execute('SELECT * FROM finance_entries')
+    rows = session.execute('SELECT * FROM fitness_entries')
     entry_counts = defaultdict(int)
 
     for row in rows:
