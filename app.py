@@ -3,21 +3,25 @@ matplotlib.use('Agg')  # Use the 'Agg' backend which doesn't require a display
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import io
-from flask import send_file
-from flask import Flask, render_template, request, redirect, url_for
+from flask import send_file, Flask, render_template, request, redirect, url_for
 from cassandra.cluster import Cluster
 from uuid import uuid4
 from collections import defaultdict
-import time
 
 app = Flask(__name__)
 
 # Connect to the Cassandra cluster
 cluster = Cluster(['127.0.0.1'])  # Replace '127.0.0.1' with your Cassandra node IP
 session = cluster.connect()
-session.execute("CREATE KEYSPACE IF NOT EXISTS todo WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-session.set_keyspace('todo')
-session.execute("CREATE TABLE IF NOT EXISTS tasks (id UUID PRIMARY KEY, task TEXT, group_tag TEXT, day TEXT, hour TEXT)")
+session.execute("CREATE KEYSPACE IF NOT EXISTS finance WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+session.set_keyspace('finance')
+session.execute('''CREATE TABLE IF NOT EXISTS finance_entries (
+                        id UUID PRIMARY KEY,
+                        entry_type TEXT,
+                        amount DECIMAL,
+                        category TEXT,
+                        date TEXT
+                   )''')
 
 # Ensure each request has its own Matplotlib instance
 def create_plot():
@@ -33,58 +37,57 @@ def save_plot(fig):
 
 @app.route('/')
 def index():
-    # Get all tasks
-    rows = session.execute("SELECT * FROM tasks")
-    tasks = [{'id': row.id, 'task': row.task, 'group': row.group_tag, 'time':row.hour, 'day':row.day} for row in rows]
+    # Get all entries
+    rows = session.execute('SELECT * FROM finance_entries')
+    entries = [{'id': row.id, 'entry_type': row.entry_type, 'amount': row.amount, 'category': row.category, 'date': row.date} for row in rows]
 
-    # Extract distinct groups from tasks
-    all_groups = [task['group'] for task in tasks]
+    # Extract distinct categories from entries
+    all_categories = [entry['category'] for entry in entries]
 
-    # Filter out empty groups
-    non_empty_groups = set(group for group in all_groups if group)
+    # Filter out empty categories
+    non_empty_categories = set(category for category in all_categories if category)
 
-    # Get the selected group from the request
-    selected_group = request.args.get('group')
+    # Get the selected category from the request
+    selected_category = request.args.get('category')
 
-    # Filter tasks for the selected group if specified
-    if selected_group:
-        tasks = [task for task in tasks if task['group'] == selected_group]
+    # Filter entries for the selected category if specified
+    if selected_category:
+        entries = [entry for entry in entries if entry['category'] == selected_category]
 
-    return render_template('index.html', tasks=tasks, groups=non_empty_groups, selected_group=selected_group)
-
+    return render_template('index.html', entries=entries, categories=non_empty_categories, selected_category=selected_category)
 
 @app.route('/add', methods=['POST'])
 def add():
-    task = request.form['task']
-    group_tag = request.form['group']
-    day = request.form.get('day')
-    hour = request.form.get('hour')
+    entry_type = request.form['entry_type']
+    amount = request.form['amount']
+    category = request.form.get('category')
+    date = request.form.get('date')
 
-    if task != "":
-        if group_tag == "":
-            group_tag = "default"
+    if entry_type != "" and amount != "":
+        if category == "":
+            category = "default"
 
-        # Insert task into the database
-        session.execute("INSERT INTO tasks (id, task, group_tag, day, hour) VALUES (%s, %s, %s, %s, %s)",
-                        (uuid4(), task, group_tag, day, hour))
+        # Insert entry into the database
+        session.execute('INSERT INTO finance_entries (id, entry_type, amount, category, date) VALUES (%s, %s, %s, %s, %s)',
+                        (uuid4(), entry_type, float(amount), category, date))
 
     return redirect(url_for('index'))
 
 @app.route('/delete/<uuid:id>')
 def delete(id):
-    session.execute("DELETE FROM tasks WHERE id = %s", [id])
+    session.execute('DELETE FROM finance_entries WHERE id = %s', [id])
     return redirect(url_for('index'))
 
-@app.route('/tasks_count_chart')
-def tasks_count_chart():
-    rows = session.execute("SELECT * FROM tasks")
-    task_counts = defaultdict(int)
+@app.route('/entries_count_chart')
+def entries_count_chart():
+    rows = session.execute('SELECT * FROM finance_entries')
+    entry_counts = defaultdict(int)
     for row in rows:
-        task_counts[row.group_tag] += 1
+        entry_counts[row.category] += 1
 
     # Create a pie chart
-    labels = list(task_counts.keys())
-    sizes = list(task_counts.values())
+    labels = list(entry_counts.keys())
+    sizes = list(entry_counts.values())
     fig, ax = create_plot()
     ax.pie(sizes, labels=labels, autopct='%1.1f%%')
     ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
@@ -95,22 +98,22 @@ def tasks_count_chart():
     # Send the image as a file
     return send_file(img_bytes, mimetype='image/png')
 
-@app.route('/task_histogram')
-def task_histogram():
+@app.route('/entry_histogram')
+def entry_histogram():
     # Fetch data from the database
-    rows = session.execute("SELECT * FROM tasks")
-    task_counts = defaultdict(int)
+    rows = session.execute('SELECT * FROM finance_entries')
+    entry_counts = defaultdict(int)
     for row in rows:
-        task_counts[row.group_tag] += 1
+        entry_counts[row.category] += 1
 
     # Create a histogram
-    labels = list(task_counts.keys())
-    sizes = list(task_counts.values())
+    labels = list(entry_counts.keys())
+    sizes = list(entry_counts.values())
     fig, ax = create_plot()
     ax.bar(labels, sizes)
-    ax.set_xlabel('Group')
-    ax.set_ylabel('Number of Tasks')
-    ax.set_title('Number of Tasks in Each Group')
+    ax.set_xlabel('Category')
+    ax.set_ylabel('Number of Entries')
+    ax.set_title('Number of Entries in Each Category')
 
     ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -120,40 +123,39 @@ def task_histogram():
     # Send the histogram image as a file
     return send_file(img_bytes, mimetype='image/png')
 
-
-@app.route('/task_hour')
-def task_hour():
+@app.route('/entry_date')
+def entry_date():
     # Fetch data from the database
-    rows = session.execute("SELECT * FROM tasks")
-    task_counts = defaultdict(int)
+    rows = session.execute('SELECT * FROM finance_entries')
+    entry_counts = defaultdict(int)
 
     for row in rows:
-        # Extract hour from the 'hour' field (assuming hour is stored in 'hour:minute' format)
-        hour = row.hour.split(':')[0]
-        task_counts[hour] += 1
+        # Extract date from the 'date' field (assuming date is stored in 'YYYY-MM-DD' format)
+        date = row.date.split('-')[2]
+        entry_counts[date] += 1
 
     # Create a histogram
-    hours = list(task_counts.keys())
-    tasks = list(task_counts.values())
+    dates = list(entry_counts.keys())
+    entries = list(entry_counts.values())
 
-    # Convert hours to integers for proper sorting and plotting
-    hours_int = [int(hour) for hour in hours]
-    hours_sorted, tasks_sorted = zip(*sorted(zip(hours_int, tasks)))
+    # Convert dates to integers for proper sorting and plotting
+    dates_int = [int(date) for date in dates]
+    dates_sorted, entries_sorted = zip(*sorted(zip(dates_int, entries)))
 
     fig, ax = create_plot()
-    ax.bar(hours_sorted, tasks_sorted)
-    ax.set_xlabel('Hour of the Day')
-    ax.set_ylabel('Number of Tasks')
-    ax.set_title('Number of Tasks by Hour of the Day')
+    ax.bar(dates_sorted, entries_sorted)
+    ax.set_xlabel('Day of the Month')
+    ax.set_ylabel('Number of Entries')
+    ax.set_title('Number of Entries by Day of the Month')
 
-    # Set x-axis ticks to show every hour
+    # Set x-axis ticks to show every day
     ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
 
-    # Ensure integers are displayed for hours on x-axis
+    # Ensure integers are displayed for days on x-axis
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('%d'))
 
-    # Set the x-axis limit from 0 to 23 (assuming 24-hour format)
-    ax.set_xlim(0, 23)
+    # Set the x-axis limit from 1 to 31 (assuming 31-day month format)
+    ax.set_xlim(1, 31)
 
     # Save the histogram to a BytesIO object
     img_bytes = save_plot(fig)
@@ -161,31 +163,30 @@ def task_hour():
     # Send the histogram image as a file
     return send_file(img_bytes, mimetype='image/png')
 
-
-@app.route('/task_month')
-def task_month():
+@app.route('/entry_month')
+def entry_month():
     # Fetch data from the database
-    rows = session.execute("SELECT * FROM tasks")
-    task_counts = defaultdict(int)
+    rows = session.execute('SELECT * FROM finance_entries')
+    entry_counts = defaultdict(int)
 
     for row in rows:
-        # Extract month from the 'day' field (assuming day is stored in 'YYYY-MM-DD' format)
-        month = row.day.split('-')[1]
-        task_counts[month] += 1
+        # Extract month from the 'date' field (assuming date is stored in 'YYYY-MM-DD' format)
+        month = row.date.split('-')[1]
+        entry_counts[month] += 1
 
     # Create a histogram
-    months = list(task_counts.keys())
-    tasks = list(task_counts.values())
+    months = list(entry_counts.keys())
+    entries = list(entry_counts.values())
 
     # Convert months to integers for proper sorting and plotting
     months_int = [int(month) for month in months]
-    months_sorted, tasks_sorted = zip(*sorted(zip(months_int, tasks)))
+    months_sorted, entries_sorted = zip(*sorted(zip(months_int, entries)))
 
     fig, ax = create_plot()
-    ax.bar(months_sorted, tasks_sorted)
+    ax.bar(months_sorted, entries_sorted)
     ax.set_xlabel('Month')
-    ax.set_ylabel('Number of Tasks')
-    ax.set_title('Number of Tasks by Month')
+    ax.set_ylabel('Number of Entries')
+    ax.set_title('Number of Entries by Month')
 
     # Set x-axis ticks to show every month
     ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
@@ -193,17 +194,15 @@ def task_month():
     # Ensure integers are displayed for months on x-axis
     ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('%d'))
 
+    # Set the x-axis limit from 1 to 12 (assuming 12-month year format)
+    ax.set_xlim(1, 12)
+
     # Save the histogram to a BytesIO object
     img_bytes = save_plot(fig)
 
     # Send the histogram image as a file
     return send_file(img_bytes, mimetype='image/png')
 
-
-
 if __name__ == '__main__':
     app.run(debug=True)
 
-
-
-#since matplot lib isnt thread safe, we needed to make each call have its for graph have its own instance. this fixed the problem of graphs not getting generated correctly
